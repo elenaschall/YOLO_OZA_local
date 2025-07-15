@@ -1,6 +1,6 @@
 {
-	"duration" : 30,
-    "overlap" : 0.5,
+	"duration" : 40,
+    "overlap" : 5,
     "desired_fs" : 250,
     "channel" : 0,
 	"log": false,
