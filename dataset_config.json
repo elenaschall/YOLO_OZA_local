@@ -1,14 +1,19 @@
 {
-	"duration" : 40,
-    "overlap" : 5,
+	"train_path" : "/Users/eschall/Documents/BioDcase2025/biodcase_development_set/train_test",
+	"val_path" : "/Users/eschall/Documents/BioDcase2025/biodcase_development_set/validation_test",
+	"test_path" : "/Users/eschall/Documents/BioDcase2025/evaluation_set/test",
+
+
+    "duration" : 300,
+    "advance_in_percent" : 0.95,
     "desired_fs" : 250,
     "channel" : 0,
 	"log": false,
 	"color": false,
 
-	"nfft" : 512,
-    "win_len" : 256,
-    "hop_len" : 20,
+	"nfft" : 1024,
+    "win_len" : 590,
+    "hop_len" : 24,
 
     "class_encoding": {"bma": 0,"bmb": 0, "bmz": 0, "bmd": 1, "bpd": 1, "bp20": 2, "bp20plus": 2}
 }

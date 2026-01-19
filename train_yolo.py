@@ -32,6 +32,7 @@ def run():
     best_params = {
         'iou': 0.3,
         'imgsz': 640,
+        'rect': True,
         'hsv_s': 0,
         'hsv_v':  0,
         'degrees': 0,
@@ -48,8 +49,8 @@ def run():
         'erasing': 0,
         'crop_fraction': 0,
     }
-    model.train(epochs=20, batch=32, data=YAML_FILE,
-                project=config['path'] + '/runs/' + run_name, resume=False, **best_params)
+    model.train(epochs=5, batch=32, data=YAML_FILE,
+                project=config['path'] + '/runs/' + run_name, resume=False, **best_params, plots=True)
 
     if "COMET_API_KEY" in os.environ and comet_ml is not None:
         experiment.end()

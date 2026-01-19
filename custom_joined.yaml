@@ -1,7 +1,7 @@
-path:  '/Users/eschall/Documents/CNN+Noise'
-train: '/Users/eschall/Documents/CNN+Noise/biodcase_development_set/train'
-test: '/Users/eschall/Documents/CNN+Noise/biodcase_development_set/validation'
-val: '/Users/eschall/Documents/CNN+Noise/biodcase_development_set/validation'
+path:  '/Users/eschall/Documents/BioDcase2025'
+train: '/Users/eschall/Documents/BioDcase2025/biodcase_development_set/train_test'
+test: '/Users/eschall/Documents/BioDcase2025/evaluation_set/test'
+val: '/Users/eschall/Documents/BioDcase2025/biodcase_development_set/validation_test'
 
 #classes names
 nc: 3

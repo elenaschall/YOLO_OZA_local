@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy
+import scipy.io
 import torch
 import torch.nn.functional as F_general
 import torchaudio
@@ -15,6 +16,8 @@ import torchaudio.functional as F
 from PIL import Image
 from tqdm import tqdm
 import datetime
+import glob
+
 
 pd.set_option('future.no_silent_downcasting', True)
 random.seed(42)
@@ -24,7 +27,7 @@ class YOLODataset:
     def __init__(self, config, path_to_dataset):
         # Spectrogram settings
         self.duration = config['duration']
-        self.overlap = config['overlap']  # overlap of the chunks in %
+        self.overlap = config['advance_in_percent']  # advance of the chunks in %
         self.desired_fs = config['desired_fs']
         self.channel = config['channel']
         self.log = config['log']
@@ -62,12 +65,12 @@ class YOLODataset:
         with open(config_path, 'w') as f:
             json.dump(self.config, f)
 
-    def create_train_dataset(self, class_encoding):
+    def create_partial_dataset(self, class_encoding):
         indices_per_deployment = self.convert_challenge_annotations_to_yolo(class_encoding=class_encoding)
         selected_samples = self.select_background_labels(indices_per_deployment)
         self.create_spectrograms(selected_samples=selected_samples)
 
-    def create_test_dataset(self, class_encoding):
+    def create_full_dataset(self, class_encoding):
         indices_per_deployment = self.convert_challenge_annotations_to_yolo(class_encoding=class_encoding)
         selected_samples = self.select_all_background_labels(indices_per_deployment)
         self.create_spectrograms(selected_samples=selected_samples)
@@ -87,7 +90,7 @@ class YOLODataset:
         for dataset, indices_dataset in indices_per_deployment.items():
             label_indices = indices_dataset['labels']
             background_indices = indices_dataset['background']
-            if label_indices >= background_indices:
+            if len(label_indices) >= len(background_indices):
                 n_labels = min(len(label_indices), len(background_indices))
                 print(f'There are more labeled spectrograms than background spectrograms, therefore {n_labels} background spectrograms are in the dataset {dataset}')
             else:
@@ -111,7 +114,7 @@ class YOLODataset:
                 img_path = self.images_folder.joinpath(sample_i + '.png')
                 wav_name = '_'.join(sample_i.split('_')[1:3])
                 wav_path = self.wavs_folder.joinpath(dataset, wav_name + '.wav')
-                i = float(sample_i.split('_')[-1])
+                i = float(sample_i.split('_')[-1]) / self.duration
                 if overwrite or (not img_path.exists()):
                     start_chunk = int(i * self.blocksize)
                     chunk, fs = torchaudio.load(wav_path, normalize=True, frame_offset=start_chunk,
@@ -152,6 +155,29 @@ class YOLODataset:
         img = np.array(sxx * 255, dtype=np.uint8)
         return img, f
 
+    def create_chunk_spectrogram_from_OPUS(self, chunk):
+        mat = scipy.io.loadmat('/Volumes/projects/MareHUBPAM/_videoTEST/AWI251-01_SV1008/PSD_Data/PSD_Data_2minRes_20130605-020932_AWI251-01_SV1008.wav.png.mat')
+        t = mat['T']
+        t = pd.to_datetime(t.flatten()-719529,unit='D')
+        f = mat['F']
+        sxx = mat['Pxx']
+        sxx = 10*np.log10(sxx)
+
+        #create some sort of filter for matrix
+        f_inds = np.where(f.flatten()<125)
+        t_inds = np.where((t > datetime.datetime(2013, 6, 5, 2, 9, 33)) & (t <= datetime.datetime(2013, 6, 5, 2, 10, 33)))
+        sxx_lf = sxx[f_inds[0],:]
+        sxx_lf = sxx_lf[:,t_inds[0]]
+        sxx_lf[np.where(f<5)] = 0
+
+        sxx_lf = 1 - sxx_lf
+        per = np.nanpercentile(sxx_lf.flatten(), 98)
+        sxx_lf = (sxx_lf - np.nanmin(sxx_lf)) / (per - np.nanmin(sxx_lf))
+        sxx_lf[sxx_lf > 1] = 1
+        img = np.array(sxx_lf * 255, dtype=np.uint8)
+        Image.fromarray(np.flipud(img)).save('/Users/eschall/Documents/YOLO_OZA/Spec_ex/OPUS_ex2min_20130605-020932_AWI251-01_SV1008_LF.png')
+        return img, f
+
     def convert_challenge_annotations_to_yolo(self, class_encoding=None):
         """
         :param annotations_file:
@@ -162,6 +188,8 @@ class YOLODataset:
         """
         f_bandwidth = (self.desired_fs / 2) - self.F_MIN
         indices_per_deployment = {}
+
+
         for selections_path in list(self.annotations_folder.glob('*.csv')):
             background_indices = []
             labels_indices = []
@@ -182,12 +210,16 @@ class YOLODataset:
             pbar = tqdm(total=len(selections['filename'].unique()))
 
             dataset_name = selections.iloc[0].dataset
+
+            # save audio snippet information for wav files with annotations
+            list_of_used_files = []
             for wav_name, wav_selections in selections.groupby('filename'):
                 wav_file_path = self.wavs_folder.joinpath(dataset_name, wav_name)
+                list_of_used_files.append(str(wav_file_path))
                 waveform_info = torchaudio.info(wav_file_path)
 
                 i = 0.0
-                while (i * self.duration + self.duration / 2) < (waveform_info.num_frames / waveform_info.sample_rate):
+                while (i * self.duration) < (waveform_info.num_frames / waveform_info.sample_rate):
                     start_seconds = i * self.duration
                     end_seconds = start_seconds + self.duration
 
@@ -211,7 +243,7 @@ class YOLODataset:
                     #     print(chunk_selection)
                     #     print(start_seconds, end_seconds)
                     chunk_selection = chunk_selection.replace(to_replace=class_encoding).infer_objects(copy=False)
-                    new_name = dataset_name + '_' + wav_name.replace('.wav', '_%s' % i)
+                    new_name = dataset_name + '_' + wav_name.replace('.wav', '_%s' % start_seconds)
 
                     if len(chunk_selection) > 0:
                         labels_indices.append(new_name)
@@ -229,12 +261,37 @@ class YOLODataset:
                     # Add the station if the image adds it as well!
                     i += self.overlap
                 pbar.update(1)
+
+                # save audio snippet information for wav files without annotations - only backgrounds
+                files = glob.glob(str(self.wavs_folder.joinpath(dataset_name)) + '/**/*.wav', recursive=True)
+                list_of_empty_files = set(files) ^ set(list_of_used_files)
+                for wav_file_path in list_of_empty_files:
+                    dataset_name = pathlib.Path(wav_file_path).parts[-2]
+                    wav_name = pathlib.Path(wav_file_path).parts[-1]
+                    waveform_info = torchaudio.info(wav_file_path)
+
+                    i = 0.0
+                    while (i * self.duration + self.duration / 2) < (
+                            waveform_info.num_frames / waveform_info.sample_rate):
+                        start_seconds = i * self.duration
+                        new_name = dataset_name + '_' + wav_name.replace('.wav', '_%s' % start_seconds)
+                        background_indices.append(new_name)
+                        label_path = self.labels_folder.joinpath('backgrounds', new_name + '.txt')
+                        chunk_selection[[
+                            'annotation',
+                            'x',
+                            'y',
+                            'width',
+                            'height']].iloc[:0].to_csv(label_path, header=None, index=None, sep=' ', mode='w')
+                        # Add the station if the image adds it as well!
+                        i += self.overlap
+
             indices_per_deployment[dataset_name] = {'background': background_indices, 'labels': labels_indices}
             pbar.close()
 
         return indices_per_deployment
 
-    def convert_yolo_detections_to_csv(self, predictions_folder, reverse_class_encoding):
+    def convert_yolo_detections_to_csv(self, predictions_folder: object, reverse_class_encoding: object) -> object:
         # Convert to DataFrame
         labels_folder = predictions_folder.joinpath('labels')
 
@@ -288,16 +345,13 @@ class YOLODataset:
 
 
 if __name__ == '__main__':
-    path_to_dataset = input('Where is the dataset folder?')
 
-    train_mode = input('Is it for the training dataset y/n?') == 'y'
     config_path = './dataset_config.json'
     f = open(config_path)
     config = json.load(f)
 
+    path_to_dataset = config['train_path']
+
     ds = YOLODataset(config, path_to_dataset)
-    if train_mode:
-        ds.create_train_dataset(class_encoding=config['class_encoding'])
-    else:
-        ds.create_test_dataset(class_encoding=config['class_encoding'])
+    ds.create_partial_dataset(class_encoding=config['class_encoding'])
 
