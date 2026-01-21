@@ -11,9 +11,9 @@
 	"log": false,
 	"color": false,
 
-	"nfft" : 1024,
-    "win_len" : 590,
-    "hop_len" : 24,
+	"nfft" : 2048,
+    "win_len" : 512,
+    "hop_len" : 21,
 
     "class_encoding": {"bma": 0,"bmb": 0, "bmz": 0, "bmd": 1, "bpd": 1, "bp20": 2, "bp20plus": 2}
 }
