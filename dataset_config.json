@@ -1,19 +1,22 @@
 {
-	"train_path" : "/Users/eschall/Documents/BioDcase2025/biodcase_development_set/train_test",
+	"train_path" : "/Users/eschall/Documents/YOLO_OZA/Data_ex",
 	"val_path" : "/Users/eschall/Documents/BioDcase2025/biodcase_development_set/validation_test",
 	"test_path" : "/Users/eschall/Documents/BioDcase2025/evaluation_set/test",
 
 
-    "duration" : 300,
+    "duration" : 60,
     "advance_in_percent" : 0.95,
-    "desired_fs" : 250,
+    "fs" : 96000,
+    "desired_fs" : 96000,
+    "freq_min": 1500,
+    "freq_max": 48000,
     "channel" : 0,
 	"log": false,
 	"color": false,
 
-	"nfft" : 2048,
-    "win_len" : 512,
-    "hop_len" : 21,
+	"nfft" : 4096,
+    "win_len" : 4000,
+    "win_overlap" : 91,
 
     "class_encoding": {"bma": 0,"bmb": 0, "bmz": 0, "bmd": 1, "bpd": 1, "bp20": 2, "bp20plus": 2}
 }

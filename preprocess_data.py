@@ -28,15 +28,18 @@ class YOLODataset:
         # Spectrogram settings
         self.duration = config['duration']
         self.overlap = config['advance_in_percent']  # advance of the chunks in %
+        self.fs = config['fs']
         self.desired_fs = config['desired_fs']
+        self.freq_min = config['freq_min']
+        self.freq_max = config['freq_max']
         self.channel = config['channel']
         self.log = config['log']
         self.color = config['color']
 
         self.nfft = config['nfft']
         self.win_len = config['win_len']
-        self.hop_len = config['hop_len']
-        self.win_overlap = self.win_len - self.hop_len
+        self.win_overlap = config['win_overlap'] #in %
+        self.win_overlap = self.win_len/100*self.win_overlap
 
         # Get the color map by name:
         #self.cmap = plt.get_cmap(config['cmap'])
@@ -53,7 +56,7 @@ class YOLODataset:
             os.mkdir(self.labels_folder.joinpath('backgrounds'))
 
         self.F_MIN = 0
-        self.blocksize = int(self.duration * self.desired_fs)
+        self.blocksize = int(self.duration * self.fs)
         self.config = config
 
     def __setitem__(self, key, value):
@@ -109,7 +112,10 @@ class YOLODataset:
         # First, create all the images
         print('Creating spectrograms...')
         for dataset, indices_dataset in selected_samples.items():
-            selected_indices = indices_dataset['selected_background'] + indices_dataset['labels']
+            if 'labels' in indices_dataset:
+                selected_indices = indices_dataset['selected_background'] + indices_dataset['labels']
+            else:
+                selected_indices = indices_dataset['selected_background']
             for sample_i in tqdm(selected_indices):
                 img_path = self.images_folder.joinpath(sample_i + '.png')
                 wav_name = '_'.join(sample_i.split('_')[1:3])
@@ -123,7 +129,7 @@ class YOLODataset:
 
                     if len(chunk) < self.blocksize:
                         chunk = F_general.pad(chunk, (0, self.blocksize - len(chunk)))
-                    img, f = self.create_chunk_spectrogram(chunk)
+                    img, f = self.create_chunk_spectrogram(chunk, fs)
 
                     if self.log:
                         fig, ax = plt.subplots()
@@ -137,8 +143,10 @@ class YOLODataset:
                     plt.close()
                 i += self.overlap
 
-    def create_chunk_spectrogram(self, chunk):
-        sos = scipy.signal.iirfilter(20, [5, 124], rp=None, rs=None, btype='band',
+    def create_chunk_spectrogram(self, chunk, fs):
+        if fs != self.desired_fs:
+            chunk = scipy.signal.decimate(chunk,int(fs/self.desired_fs))
+        sos = scipy.signal.iirfilter(4, self.freq_min, rp=None, rs=None, btype='high',
                                      analog=False, ftype='butter', output='sos',
                                      fs=self.desired_fs)
         chunk = scipy.signal.sosfilt(sos, chunk)
@@ -149,7 +157,7 @@ class YOLODataset:
                                              return_onesided=True, scaling='density', axis=-1,
                                              mode='magnitude')
         sxx = 1 - sxx
-        per = np.percentile(sxx.flatten(), 98)
+        per = np.percentile(sxx.flatten(), 90)
         sxx = (sxx - sxx.min()) / (per - sxx.min())
         sxx[sxx > 1] = 1
         img = np.array(sxx * 255, dtype=np.uint8)
@@ -189,78 +197,78 @@ class YOLODataset:
         f_bandwidth = (self.desired_fs / 2) - self.F_MIN
         indices_per_deployment = {}
 
+        if len(list(self.annotations_folder.glob('*.csv'))) > 0:
+            for selections_path in list(self.annotations_folder.glob('*.csv')):
+                background_indices = []
+                labels_indices = []
+                selections = pd.read_csv(selections_path, parse_dates=['start_datetime', 'end_datetime'])
+                selections.loc[selections['low_frequency'] < self.F_MIN, 'low_frequency'] = self.F_MIN
+                selections['height'] = (selections['high_frequency'] - selections['low_frequency']) / f_bandwidth
 
-        for selections_path in list(self.annotations_folder.glob('*.csv')):
-            background_indices = []
-            labels_indices = []
-            selections = pd.read_csv(selections_path, parse_dates=['start_datetime', 'end_datetime'])
-            selections.loc[selections['low_frequency'] < self.F_MIN, 'low_frequency'] = self.F_MIN
-            selections['height'] = (selections['high_frequency'] - selections['low_frequency']) / f_bandwidth
+                # The y is from the TOP!
+                selections['y'] = 1 - (selections['high_frequency'] / f_bandwidth)
 
-            # The y is from the TOP!
-            selections['y'] = 1 - (selections['high_frequency'] / f_bandwidth)
+                # Deal with datetime
+                selections['start_datetime_wav'] = pd.to_datetime(selections['filename'].apply(lambda y: y.split('.')[0]),
+                                                                  format='%Y-%m-%dT%H-%M-%S_%f')
+                selections['start_datetime_wav'] = selections['start_datetime_wav'].dt.tz_localize('UTC')
+                selections['start_seconds'] = (selections.start_datetime - selections.start_datetime_wav).dt.total_seconds()
+                selections['end_seconds'] = (selections.end_datetime - selections.start_datetime_wav).dt.total_seconds()
 
-            # Deal with datetime
-            selections['start_datetime_wav'] = pd.to_datetime(selections['filename'].apply(lambda y: y.split('.')[0]),
-                                                              format='%Y-%m-%dT%H-%M-%S_%f')
-            selections['start_datetime_wav'] = selections['start_datetime_wav'].dt.tz_localize('UTC')
-            selections['start_seconds'] = (selections.start_datetime - selections.start_datetime_wav).dt.total_seconds()
-            selections['end_seconds'] = (selections.end_datetime - selections.start_datetime_wav).dt.total_seconds()
+                pbar = tqdm(total=len(selections['filename'].unique()))
 
-            pbar = tqdm(total=len(selections['filename'].unique()))
+                dataset_name = selections.iloc[0].dataset
 
-            dataset_name = selections.iloc[0].dataset
+                # save audio snippet information for wav files with annotations
+                list_of_used_files = []
+                for wav_name, wav_selections in selections.groupby('filename'):
+                    wav_file_path = self.wavs_folder.joinpath(dataset_name, wav_name)
+                    list_of_used_files.append(str(wav_file_path))
+                    waveform_info = torchaudio.info(wav_file_path)
 
-            # save audio snippet information for wav files with annotations
-            list_of_used_files = []
-            for wav_name, wav_selections in selections.groupby('filename'):
-                wav_file_path = self.wavs_folder.joinpath(dataset_name, wav_name)
-                list_of_used_files.append(str(wav_file_path))
-                waveform_info = torchaudio.info(wav_file_path)
+                    i = 0.0
+                    while (i * self.duration) < (waveform_info.num_frames / waveform_info.sample_rate):
+                        start_seconds = i * self.duration
+                        end_seconds = start_seconds + self.duration
 
-                i = 0.0
-                while (i * self.duration) < (waveform_info.num_frames / waveform_info.sample_rate):
-                    start_seconds = i * self.duration
-                    end_seconds = start_seconds + self.duration
+                        start_mask = (wav_selections['start_seconds'] >= start_seconds) & (wav_selections[
+                                                                                               'start_seconds'] <= end_seconds)
+                        end_mask = (wav_selections['start_seconds'] >= start_seconds) & (wav_selections[
+                                                                                             'end_seconds'] <= end_seconds)
+                        chunk_selection = wav_selections.loc[start_mask | end_mask]
+                        chunk_selection = chunk_selection.assign(start_x=((chunk_selection['start_seconds'] - i * self.duration) / self.duration).clip(lower=0, upper=1).values)
+                        chunk_selection = chunk_selection.assign(end_x=((chunk_selection['end_seconds'] - i * self.duration) / self.duration).clip(lower=0, upper=1).values)
 
-                    start_mask = (wav_selections['start_seconds'] >= start_seconds) & (wav_selections[
-                                                                                           'start_seconds'] <= end_seconds)
-                    end_mask = (wav_selections['start_seconds'] >= start_seconds) & (wav_selections[
-                                                                                         'end_seconds'] <= end_seconds)
-                    chunk_selection = wav_selections.loc[start_mask | end_mask]
-                    chunk_selection = chunk_selection.assign(start_x=((chunk_selection['start_seconds'] - i * self.duration) / self.duration).clip(lower=0, upper=1).values)
-                    chunk_selection = chunk_selection.assign(end_x=((chunk_selection['end_seconds'] - i * self.duration) / self.duration).clip(lower=0, upper=1).values)
+                        # compute the width in pixels
+                        chunk_selection = chunk_selection.assign(width=(chunk_selection['end_x'] - chunk_selection['start_x']).values)
 
-                    # compute the width in pixels
-                    chunk_selection = chunk_selection.assign(width=(chunk_selection['end_x'] - chunk_selection['start_x']).values)
+                        # Save the chunk detections so that they are with the yolo format
+                        # <class > < x > < y > < width > < height >
+                        chunk_selection = chunk_selection.assign(x=(chunk_selection['start_x'] + chunk_selection['width'] / 2).values)
+                        chunk_selection.loc[:, 'y'] = (chunk_selection['y'] + chunk_selection['height'] / 2).values
 
-                    # Save the chunk detections so that they are with the yolo format
-                    # <class > < x > < y > < width > < height >
-                    chunk_selection = chunk_selection.assign(x=(chunk_selection['start_x'] + chunk_selection['width'] / 2).values)
-                    chunk_selection.loc[:, 'y'] = (chunk_selection['y'] + chunk_selection['height'] / 2).values
+                        # if ((chunk_selection.x + chunk_selection.width/2) > 1).sum() > 0 or (chunk_selection.y > 1).sum() > 0:
+                        #     print(chunk_selection)
+                        #     print(start_seconds, end_seconds)
+                        chunk_selection = chunk_selection.replace(to_replace=class_encoding).infer_objects(copy=False)
+                        new_name = dataset_name + '_' + wav_name.replace('.wav', '_%s' % start_seconds)
 
-                    # if ((chunk_selection.x + chunk_selection.width/2) > 1).sum() > 0 or (chunk_selection.y > 1).sum() > 0:
-                    #     print(chunk_selection)
-                    #     print(start_seconds, end_seconds)
-                    chunk_selection = chunk_selection.replace(to_replace=class_encoding).infer_objects(copy=False)
-                    new_name = dataset_name + '_' + wav_name.replace('.wav', '_%s' % start_seconds)
+                        if len(chunk_selection) > 0:
+                            labels_indices.append(new_name)
+                            label_path = self.labels_folder.joinpath(new_name + '.txt')
+                        else:
+                            background_indices.append(new_name)
+                            label_path = self.labels_folder.joinpath('backgrounds', new_name + '.txt')
 
-                    if len(chunk_selection) > 0:
-                        labels_indices.append(new_name)
-                        label_path = self.labels_folder.joinpath(new_name + '.txt')
-                    else:
-                        background_indices.append(new_name)
-                        label_path = self.labels_folder.joinpath('backgrounds', new_name + '.txt')
-
-                    chunk_selection[[
-                        'annotation',
-                        'x',
-                        'y',
-                        'width',
-                        'height']].to_csv(label_path, header=None, index=None, sep=' ', mode='w')
-                    # Add the station if the image adds it as well!
-                    i += self.overlap
-                pbar.update(1)
+                        chunk_selection[[
+                            'annotation',
+                            'x',
+                            'y',
+                            'width',
+                            'height']].to_csv(label_path, header=None, index=None, sep=' ', mode='w')
+                        # Add the station if the image adds it as well!
+                        i += self.overlap
+                    pbar.update(1)
 
                 # save audio snippet information for wav files without annotations - only backgrounds
                 files = glob.glob(str(self.wavs_folder.joinpath(dataset_name)) + '/**/*.wav', recursive=True)
@@ -286,8 +294,32 @@ class YOLODataset:
                         # Add the station if the image adds it as well!
                         i += self.overlap
 
-            indices_per_deployment[dataset_name] = {'background': background_indices, 'labels': labels_indices}
-            pbar.close()
+                indices_per_deployment[dataset_name] = {'background': background_indices, 'labels': labels_indices}
+                pbar.close()
+        else:
+            dataset_paths = glob.glob(str(self.wavs_folder) + "/*/")
+            for dataset_path in dataset_paths:
+                files = glob.glob(str(dataset_path) + '/**/*.wav', recursive=True)
+                dataset_name = pathlib.Path(dataset_path).parts[-1]
+                background_indices = []
+                for wav_file_path in files:
+                    wav_name = pathlib.Path(wav_file_path).parts[-1]
+                    waveform_info = torchaudio.info(wav_file_path)
+
+                    i = 0.0
+                    while (i * self.duration + self.duration / 2) < (
+                            waveform_info.num_frames / waveform_info.sample_rate):
+                        start_seconds = i * self.duration
+                        new_name = dataset_name + '_' + wav_name.replace('.wav', '_%s' % start_seconds)
+                        background_indices.append(new_name)
+                        label_path = self.labels_folder.joinpath('backgrounds', new_name + '.txt')
+                        chunk_selection = pd.DataFrame()
+                        chunk_selection.iloc[:0].to_csv(label_path, header=None, index=None, sep=' ', mode='w')
+                        # Add the station if the image adds it as well!
+                        i += self.overlap
+
+                indices_per_deployment[dataset_name] = {'background': background_indices}
+
 
         return indices_per_deployment
 
@@ -353,5 +385,5 @@ if __name__ == '__main__':
     path_to_dataset = config['train_path']
 
     ds = YOLODataset(config, path_to_dataset)
-    ds.create_partial_dataset(class_encoding=config['class_encoding'])
+    ds.create_full_dataset(class_encoding=config['class_encoding'])
 
