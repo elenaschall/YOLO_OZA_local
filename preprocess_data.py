@@ -156,8 +156,8 @@ class YOLODataset:
                                              detrend=False,
                                              return_onesided=True, scaling='density', axis=-1,
                                              mode='magnitude')
-        sxx = 1 - sxx
-        per = np.percentile(sxx.flatten(), 90)
+        sxx = 1 - 10*np.log10(sxx)
+        per = np.percentile(sxx.flatten(), 98)
         sxx = (sxx - sxx.min()) / (per - sxx.min())
         sxx[sxx > 1] = 1
         img = np.array(sxx * 255, dtype=np.uint8)
