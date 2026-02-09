@@ -126,10 +126,13 @@ class YOLODataset:
                     chunk, fs = torchaudio.load(wav_path, normalize=True, frame_offset=start_chunk,
                                                 num_frames=self.blocksize)
                     chunk = chunk[0, :]
+                    real_dur = len(chunk) / self.desired_fs
+                    if sample_i[-6:] == '3577.5':
+                        print('')
 
                     if len(chunk) < self.blocksize:
                         chunk = F_general.pad(chunk, (0, self.blocksize - len(chunk)))
-                    img, f = self.create_chunk_spectrogram(chunk, fs)
+                    img, f = self.create_chunk_spectrogram(chunk, fs, real_dur)
 
                     if self.log:
                         fig, ax = plt.subplots()
@@ -143,7 +146,7 @@ class YOLODataset:
                     plt.close()
                 i += self.overlap
 
-    def create_chunk_spectrogram(self, chunk, fs):
+    def create_chunk_spectrogram(self, chunk, fs, real_dur):
         if fs != self.desired_fs:
             chunk = scipy.signal.decimate(chunk,int(fs/self.desired_fs))
         sos = scipy.signal.iirfilter(4, self.freq_min, rp=None, rs=None, btype='high',
@@ -156,9 +159,10 @@ class YOLODataset:
                                              detrend=False,
                                              return_onesided=True, scaling='density', axis=-1,
                                              mode='magnitude')
-        sxx = 1 - 10*np.log10(sxx)
-        per = np.percentile(sxx.flatten(), 98)
-        sxx = (sxx - sxx.min()) / (per - sxx.min())
+        sxx[:,0:len(t[t<real_dur])] = 10*np.log10(sxx[:,0:len(t[t<real_dur])])
+        sxx = 1- sxx
+        per = np.percentile(sxx[:,0:len(t[t<real_dur])].flatten(), 98)
+        sxx[:,0:len(t[t<real_dur])] = (sxx[:,0:len(t[t<real_dur])] - sxx[:,0:len(t[t<real_dur])].min()) / (per - sxx[:,0:len(t[t<real_dur])].min())
         sxx[sxx > 1] = 1
         img = np.array(sxx * 255, dtype=np.uint8)
         return img, f
@@ -337,7 +341,7 @@ class YOLODataset:
             wav_name = '_'.join(name_parts[1:-1]) + '.wav'
             dataset_name = name_parts[0]
 
-            offset_i = float(name_parts[-1].split('.txt')[0])
+            offset_i = float(name_parts[-1].split('.txt')[0]) / self.duration
             detections_i = pd.read_table(txt_label, header=None, sep=' ', names=['annotation', 'x', 'y',
                                                                                  'width', 'height', 'confidence'])
             detections_i['filename'] = wav_name
@@ -383,6 +387,7 @@ if __name__ == '__main__':
     config = json.load(f)
 
     path_to_dataset = config['train_path']
+    pathlib.Path(path_to_dataset).joinpath('dataset_config.json').write_text(json.dumps(config))
 
     ds = YOLODataset(config, path_to_dataset)
     ds.create_full_dataset(class_encoding=config['class_encoding'])
