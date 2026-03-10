@@ -127,8 +127,9 @@ class YOLODataset:
                                                 num_frames=self.blocksize)
                     chunk = chunk[0, :]
                     real_dur = len(chunk) / self.desired_fs
-                    if sample_i[-6:] == '3577.5':
-                        print('')
+
+                    if real_dur < 5:
+                        continue  # if duration shorter than 5s skip to next iteration
 
                     if len(chunk) < self.blocksize:
                         chunk = F_general.pad(chunk, (0, self.blocksize - len(chunk)))
